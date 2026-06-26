@@ -10,23 +10,23 @@ st.set_page_config(page_title="Inventory & Backlog Simulator", layout="wide")
 
 st.title("📊 Inventory & Backlog Simulator")
 
-# --- Dynamic Data Generation Engine ---
-def generate_dynamic_data(demand_avg, demand_std, rop, supply_qty, lead_time=14):
-    """Simulates a continuous review system to generate 90 days of realistic data."""
+# --- Dynamic Data Generation Engine (Upgraded with Backlog & Lead Time Logic) ---
+def generate_dynamic_data(demand_avg, demand_std, rop, supply_qty, lead_time):
+    """Simulates a continuous review system with lead times and backlogs."""
     dates = pd.date_range(start="2026-04-01", periods=90)
     
-    # Generate Customer Orders (Demand) with some natural variance
+    # Generate Customer Orders (Demand)
     order_qty = np.maximum(0, np.random.normal(demand_avg, demand_std, 90)).astype(int)
     
     qty_in = np.zeros(90, dtype=int)
     qty_out = np.zeros(90, dtype=int)
     
-    # Initial state logic
     current_inv = int(rop * 1.25)
-    pending_supply = []  # Tracks (arrival_day, quantity)
+    current_backlog = 0
+    pending_supply = []  
     
-    # Assume dispatch capacity is slightly higher than average demand to process backlogs
-    dispatch_capacity = int(demand_avg * 1.2)
+    # Dispatch capacity allows for normal demand + 50% extra capacity to catch up on backlogs
+    dispatch_capacity = int(demand_avg * 1.5)
     
     for day in range(90):
         # 1. Receive incoming supply if lead time has elapsed
@@ -37,14 +37,22 @@ def generate_dynamic_data(demand_avg, demand_std, rop, supply_qty, lead_time=14)
                 
         pending_supply = [ps for ps in pending_supply if ps[0] > day]
         
-        # 2. Check Inventory Position against ROP
-        virtual_inv = current_inv + sum(sq for _, sq in pending_supply)
-        if virtual_inv <= rop:
+        # 2. Reorder Logic: Inventory Position = On-Hand + On-Order - Backorders
+        inventory_position = current_inv + sum(sq for _, sq in pending_supply) - current_backlog
+        if inventory_position <= rop:
+            # Place a new order that will arrive after the lead time
             pending_supply.append((day + lead_time, supply_qty))
             
-        # 3. Fulfill Orders (Qty. Out) bounded by physical inventory and plant capacity
-        qty_out[day] = min(current_inv, dispatch_capacity)
+        # 3. Fulfill Orders (Qty. Out)
+        # We must fulfill today's orders PLUS any existing backlogs
+        total_demand_to_fulfill = order_qty[day] + current_backlog
+        
+        # We can only ship what we have physically, bounded by our daily processing capacity
+        qty_out[day] = min(current_inv, total_demand_to_fulfill, dispatch_capacity)
+        
+        # 4. Update balances for the next day
         current_inv -= qty_out[day]
+        current_backlog = total_demand_to_fulfill - qty_out[day]
 
     return pd.DataFrame({
         "Date": dates,
@@ -77,7 +85,6 @@ data_choice = st.sidebar.radio(
     key="data_source_radio"
 )
 
-# Variables for main logic
 df = None
 active_opening_balance = 0.0
 
@@ -100,6 +107,7 @@ elif data_choice == "Dynamic Simulation":
     with col_a:
         demand_mean = st.number_input("Demand Avg", value=120, step=10)
         rop = st.number_input("Reorder Point", value=500, step=50)
+        lead_time = st.number_input("Lead Time (Days)", value=14, step=1)
     with col_b:
         demand_std = st.number_input("Demand Std Dev", value=15, step=5)
         supply_qty = st.number_input("Supply Qty", value=2000, step=100)
@@ -108,7 +116,7 @@ elif data_choice == "Dynamic Simulation":
     st.sidebar.info(f"Opening Balance is locked to **{calculated_opening}** (1.25 × ROP).")
     
     if st.sidebar.button("⚙️ Generate Data"):
-        generated_df, initial_bal = generate_dynamic_data(demand_mean, demand_std, rop, supply_qty)
+        generated_df, initial_bal = generate_dynamic_data(demand_mean, demand_std, rop, supply_qty, lead_time)
         st.session_state.sim_data = generated_df
         st.session_state.sim_opening_balance = initial_bal
         
