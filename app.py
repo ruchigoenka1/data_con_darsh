@@ -78,7 +78,6 @@ if uploaded_file is not None:
     backlog_table = []
     aging_records = []
     
-    current_pending_opening = 0.0
     order_id_counter = 0
     
     for index, row in df.iterrows():
@@ -112,18 +111,15 @@ if uploaded_file is not None:
                 oldest_order['remaining_qty'] -= qty_to_fulfill
                 qty_to_fulfill = 0
                 
-        # 3. Calculate metrics
+        # 3. Calculate closing metrics
         total_pending = sum(order['remaining_qty'] for order in pending_orders)
         
         backlog_table.append({
             'Date': current_date.strftime('%Y-%m-%d'),
-            'Pending Order Opening Balance': current_pending_opening,
             'New Orders Received': order_qty,
             'Orders Fulfilled': qty_out,
             'Pending Order Closing Balance': total_pending
         })
-        
-        current_pending_opening = total_pending
         
         # 4. Snapshot current queue state
         for order in pending_orders:
@@ -148,8 +144,8 @@ if uploaded_file is not None:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    # --- NEW: Combined Flow Chart (Line + Bar) ---
-    st.markdown("### Daily Backlog Flow (In, Out & Balances)")
+    # --- Combined Flow Chart (Line + Bar) ---
+    st.markdown("### Daily Backlog Flow (In, Out & Closing Balance)")
     
     fig_flow = go.Figure()
     
@@ -162,11 +158,7 @@ if uploaded_file is not None:
         opacity=0.7
     ))
     
-    # Add Lines for Balances and Fulfilled
-    fig_flow.add_trace(go.Scatter(
-        x=df_backlog['Date'], y=df_backlog['Pending Order Opening Balance'],
-        mode='lines+markers', name='Opening Balance', line=dict(color='#f39c12', width=2)
-    ))
+    # Add Lines for Fulfilled and Closing Balances
     fig_flow.add_trace(go.Scatter(
         x=df_backlog['Date'], y=df_backlog['Orders Fulfilled'],
         mode='lines+markers', name='Orders Fulfilled (Out)', line=dict(color='#27ae60', width=2)
@@ -242,14 +234,13 @@ if uploaded_file is not None:
         st.markdown("---")
         st.markdown("### 5. Order Size vs. Fulfillment Speed Diagnostics")
         
-        # 1. Bubble Scatter Plot (Now full width with Blue -> Red color scale)
         fig_bubble = px.scatter(
             df_orders,
             x='Order Date',
             y='Days to Fulfill',
             size='Order Size (Meters)',
             color='Days to Fulfill',
-            color_continuous_scale=['blue', 'red'], # Color variance applied here
+            color_continuous_scale=['blue', 'red'],
             title='Order Fulfillment Velocity (Bubble Size = Order Quantity)',
             labels={'Days to Fulfill': 'Days Taken to Clear'},
             hover_data=['Order Size (Meters)', 'Status']
@@ -261,7 +252,6 @@ if uploaded_file is not None:
         fig_bubble.update_traces(marker=dict(sizemin=5))
         st.plotly_chart(fig_bubble, use_container_width=True)
             
-        # 2. Distribution Histogram (Now full width below the scatter plot)
         fig_hist = px.histogram(
             df_orders,
             x='Days to Fulfill',
