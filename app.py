@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import io
 import numpy as np
 
@@ -72,8 +73,8 @@ if uploaded_file is not None:
     st.markdown("---")
     st.markdown("### 3. Pending Order Analysis")
     
-    pending_orders = [] # Queue for daily unfulfilled tracking
-    order_history = []  # Tracks exact life cycle of each distinct order row
+    pending_orders = [] 
+    order_history = []  
     backlog_table = []
     aging_records = []
     
@@ -85,7 +86,7 @@ if uploaded_file is not None:
         qty_out = row['Qty. Out (Meter)']
         order_qty = row['Order Qty']
         
-        # 1. Register new order if present
+        # 1. Register new order
         if order_qty > 0:
             order_node = {
                 'id': order_id_counter,
@@ -98,7 +99,7 @@ if uploaded_file is not None:
             order_history.append(order_node)
             order_id_counter += 1
             
-        # 2. Fulfill orders via FIFO using Qty. Out
+        # 2. Fulfill orders via FIFO
         qty_to_fulfill = qty_out
         while qty_to_fulfill > 0 and len(pending_orders) > 0:
             oldest_order = pending_orders[0]
@@ -111,7 +112,7 @@ if uploaded_file is not None:
                 oldest_order['remaining_qty'] -= qty_to_fulfill
                 qty_to_fulfill = 0
                 
-        # 3. Calculate metrics for the summary table
+        # 3. Calculate metrics
         total_pending = sum(order['remaining_qty'] for order in pending_orders)
         
         backlog_table.append({
@@ -124,7 +125,7 @@ if uploaded_file is not None:
         
         current_pending_opening = total_pending
         
-        # 4. Snapshot current queue state for the daily aging graph
+        # 4. Snapshot current queue state
         for order in pending_orders:
             age_days = (current_date - order['placed_date']).days
             aging_records.append({
@@ -147,11 +148,46 @@ if uploaded_file is not None:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
+    # --- NEW: Combined Flow Chart (Line + Bar) ---
+    st.markdown("### Daily Backlog Flow (In, Out & Balances)")
+    
+    fig_flow = go.Figure()
+    
+    # Add Bar for New Orders
+    fig_flow.add_trace(go.Bar(
+        x=df_backlog['Date'],
+        y=df_backlog['New Orders Received'],
+        name='New Orders (In)',
+        marker_color='#4a90e2',
+        opacity=0.7
+    ))
+    
+    # Add Lines for Balances and Fulfilled
+    fig_flow.add_trace(go.Scatter(
+        x=df_backlog['Date'], y=df_backlog['Pending Order Opening Balance'],
+        mode='lines+markers', name='Opening Balance', line=dict(color='#f39c12', width=2)
+    ))
+    fig_flow.add_trace(go.Scatter(
+        x=df_backlog['Date'], y=df_backlog['Orders Fulfilled'],
+        mode='lines+markers', name='Orders Fulfilled (Out)', line=dict(color='#27ae60', width=2)
+    ))
+    fig_flow.add_trace(go.Scatter(
+        x=df_backlog['Date'], y=df_backlog['Pending Order Closing Balance'],
+        mode='lines+markers', name='Closing Balance', line=dict(color='#e74c3c', width=3)
+    ))
+    
+    fig_flow.update_layout(
+        plot_bgcolor='black', paper_bgcolor='black', font=dict(color='white'),
+        xaxis=dict(showgrid=True, gridcolor='#333333'), yaxis=dict(showgrid=True, gridcolor='#333333'),
+        hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    st.plotly_chart(fig_flow, use_container_width=True)
+
+
     # --- Section 4: Advanced Fulfillment & Aging Analytics ---
     st.markdown("---")
     st.markdown("### 4. Backlog Aging & Lead-Time Analytics")
     
-    # 1. Running Backlog Graph Controls
     age_windows_input = st.text_input("Age Windows for Backlog Graph (comma-separated days)", "7, 14, 30, 60")
     
     if aging_records:
@@ -188,10 +224,8 @@ if uploaded_file is not None:
         except ValueError:
             st.error("Please check your age window formatting.")
             
-    # Compile analytical data for completed/tracked orders
     completed_orders_data = []
     for order in order_history:
-        # If still unfulfilled at the end of the timeline, compute days relative to final date
         end_date = order['fully_fulfilled_date'] if order['fully_fulfilled_date'] else df['Date'].max()
         days_to_fulfill = (end_date - order['placed_date']).days
         
@@ -208,45 +242,40 @@ if uploaded_file is not None:
         st.markdown("---")
         st.markdown("### 5. Order Size vs. Fulfillment Speed Diagnostics")
         
-        graph_col1, graph_col2 = st.columns(2)
-        
-        with graph_col1:
-            # Bubble Scatter Plot
-            fig_bubble = px.scatter(
-                df_orders,
-                x='Order Date',
-                y='Days to Fulfill',
-                size='Order Size (Meters)',
-                color='Days to Fulfill',
-                color_continuous_scale='Blues',
-                title='Order Fulfillment Velocity (Bubble Size = Order Quantity)',
-                labels={'Days to Fulfill': 'Days Taken to Clear'},
-                hover_data=['Order Size (Meters)', 'Status']
-            )
-            fig_bubble.update_layout(
-                plot_bgcolor='black', paper_bgcolor='black', font=dict(color='white'),
-                xaxis=dict(showgrid=True, gridcolor='#333333'), yaxis=dict(showgrid=True, gridcolor='#333333')
-            )
-            # Ensure bubble markers are noticeable
-            fig_bubble.update_traces(marker=dict(sizemin=5))
-            st.plotly_chart(fig_bubble, use_container_width=True)
+        # 1. Bubble Scatter Plot (Now full width with Blue -> Red color scale)
+        fig_bubble = px.scatter(
+            df_orders,
+            x='Order Date',
+            y='Days to Fulfill',
+            size='Order Size (Meters)',
+            color='Days to Fulfill',
+            color_continuous_scale=['blue', 'red'], # Color variance applied here
+            title='Order Fulfillment Velocity (Bubble Size = Order Quantity)',
+            labels={'Days to Fulfill': 'Days Taken to Clear'},
+            hover_data=['Order Size (Meters)', 'Status']
+        )
+        fig_bubble.update_layout(
+            plot_bgcolor='black', paper_bgcolor='black', font=dict(color='white'),
+            xaxis=dict(showgrid=True, gridcolor='#333333'), yaxis=dict(showgrid=True, gridcolor='#333333')
+        )
+        fig_bubble.update_traces(marker=dict(sizemin=5))
+        st.plotly_chart(fig_bubble, use_container_width=True)
             
-        with graph_col2:
-            # Distribution Histogram
-            fig_hist = px.histogram(
-                df_orders,
-                x='Days to Fulfill',
-                color_discrete_sequence=['#2b5c8f'],
-                title='Fulfillment Lead Time Frequency Distribution',
-                labels={'Days to Fulfill': 'Days Taken to Fulfill Order', 'count': 'Number of Orders'},
-                nbins=15
-            )
-            fig_hist.update_layout(
-                plot_bgcolor='black', paper_bgcolor='black', font=dict(color='white'),
-                xaxis=dict(showgrid=True, gridcolor='#333333'), yaxis=dict(showgrid=True, gridcolor='#333333'),
-                bargap=0.1
-            )
-            st.plotly_chart(fig_hist, use_container_width=True)
+        # 2. Distribution Histogram (Now full width below the scatter plot)
+        fig_hist = px.histogram(
+            df_orders,
+            x='Days to Fulfill',
+            color_discrete_sequence=['#2b5c8f'],
+            title='Fulfillment Lead Time Frequency Distribution',
+            labels={'Days to Fulfill': 'Days Taken to Fulfill Order', 'count': 'Number of Orders'},
+            nbins=15
+        )
+        fig_hist.update_layout(
+            plot_bgcolor='black', paper_bgcolor='black', font=dict(color='white'),
+            xaxis=dict(showgrid=True, gridcolor='#333333'), yaxis=dict(showgrid=True, gridcolor='#333333'),
+            bargap=0.1
+        )
+        st.plotly_chart(fig_hist, use_container_width=True)
             
 else:
     st.info("Please upload a file to run the simulators.")
