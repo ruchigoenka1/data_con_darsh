@@ -34,30 +34,30 @@ def get_sample_data():
 # --- Sidebar Control Panel ---
 st.sidebar.header("🛠️ Data Controls")
 
-# Initialize session state for data source selection if it doesn't exist
-if 'data_source' not in st.session_state:
-    st.session_state.data_source = "Upload File"
+# Initialize session state if it doesn't exist
+if 'data_source_radio' not in st.session_state:
+    st.session_state.data_source_radio = "Upload File"
 
-# Data selection radio button
+# 1. Define the callback function to reset the state safely
+def reset_app_state():
+    st.session_state.data_source_radio = "Upload File"
+
+# 2. Attach the callback to the button
+st.sidebar.button("🔄 Reset Simulator", on_click=reset_app_state)
+
+# 3. Render the radio widget
 data_choice = st.sidebar.radio(
     "Choose Data Source:",
     ["Upload File", "Use Built-in Sample Data"],
     key="data_source_radio"
 )
 
-# Initial Opening Balance Input
 initial_opening_balance = st.sidebar.number_input(
     "Initial Opening Balance", 
     min_value=0.0, 
     value=150.0, 
     step=1.0
 )
-
-# Reset Button
-if st.sidebar.button("🔄 Reset Simulator"):
-    # Clear cache and reset state
-    st.session_state.data_source_radio = "Upload File"
-    st.rerun()
 
 # --- Data Loading Logic ---
 df = None
