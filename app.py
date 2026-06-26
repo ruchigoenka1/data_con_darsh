@@ -12,23 +12,50 @@ st.title("📊 Inventory & Backlog Simulator")
 
 # --- Function to Generate Built-in Sample Data ---
 def get_sample_data():
-    np.random.seed(42)
+    # Generate 90 continuous days
     dates = pd.date_range(start="2026-04-01", periods=90)
-    order_qty = np.random.poisson(lam=120, size=90)
-    order_qty[30:61] = order_qty[30:61] * 3  # May Demand Spike
     
-    qty_out = np.where(order_qty > 0, np.random.normal(135, 15, 90), 0).astype(int)
-    qty_out = np.clip(qty_out, 0, 160) 
+    order_qty = []
+    qty_out = []
+    qty_in = []
     
-    qty_in = np.zeros(90)
-    for i in range(0, 90, 14):
-        qty_in[i] = 2000
-        
+    for day in range(90):
+        # 1. Supply side arrivals (Qty In) - keeps simple fixed batch drops
+        if day in [0, 14, 28, 42, 56, 70, 84]:
+            qty_in.append(2000)
+        else:
+            qty_in.append(0)
+            
+        # 2. Phase 1: Clean Baseline Equilibrium (Days 1 to 20)
+        if day < 20:
+            order_qty.append(100)
+            qty_out.append(100)
+            
+        # 3. Phase 2: The Structural Surge Peak (Days 21 to 40)
+        elif 20 <= day < 40:
+            # Smoothly ramp up orders up to 450, then bring them down to 300
+            if day < 30:
+                orders = 100 + (day - 20) * 35  # Climbing ramp
+            else:
+                orders = 450 - (day - 30) * 15  # High plateau sloping down
+            order_qty.append(int(orders))
+            qty_out.append(120)  # Plant capacity bottleneck constraint
+            
+        # 4. Phase 3: The Burn Down Recovery (Days 41 to 75)
+        elif 40 <= day < 75:
+            order_qty.append(15)  # Market cools/orders paused to clear backlog
+            qty_out.append(150)  # Max out overtime processing capacity to burn backlog down
+            
+        # 5. Phase 4: Reset back to standard run-rate (Days 75 to 90)
+        else:
+            order_qty.append(100)
+            qty_out.append(100)
+
     return pd.DataFrame({
         "Date": dates,
-        "Qty. In (Meter)": qty_in.astype(int),
+        "Qty. In (Meter)": qty_in,
         "Qty. Out (Meter)": qty_out,
-        "Order Qty": order_qty.astype(int)
+        "Order Qty": order_qty
     })
 
 # --- Sidebar Control Panel ---
