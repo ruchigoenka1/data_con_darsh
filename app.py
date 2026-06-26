@@ -10,9 +10,8 @@ st.set_page_config(page_title="Inventory & Backlog Simulator", layout="wide")
 
 st.title("📊 Inventory & Backlog Simulator")
 
-# --- Function to Generate Built-in Sample Data ---
+# --- Function to Generate Perfect Continuous Wave Sample Data ---
 def get_sample_data():
-    # Generate 90 continuous days
     dates = pd.date_range(start="2026-04-01", periods=90)
     
     order_qty = []
@@ -20,7 +19,7 @@ def get_sample_data():
     qty_in = []
     
     for day in range(90):
-        # 1. Supply side arrivals (Qty In) - keeps simple fixed batch drops
+        # 1. Supply side arrivals (Qty In)
         if day in [0, 14, 28, 42, 56, 70, 84]:
             qty_in.append(2000)
         else:
@@ -33,18 +32,17 @@ def get_sample_data():
             
         # 3. Phase 2: The Structural Surge Peak (Days 21 to 40)
         elif 20 <= day < 40:
-            # Smoothly ramp up orders up to 450, then bring them down to 300
             if day < 30:
-                orders = 100 + (day - 20) * 35  # Climbing ramp
+                orders = 100 + (day - 20) * 35  # Climbing ramp up to 450
             else:
-                orders = 450 - (day - 30) * 15  # High plateau sloping down
+                orders = 450 - (day - 30) * 15  # Plateau sloping down to 300
             order_qty.append(int(orders))
             qty_out.append(120)  # Plant capacity bottleneck constraint
             
         # 4. Phase 3: The Burn Down Recovery (Days 41 to 75)
         elif 40 <= day < 75:
-            order_qty.append(15)  # Market cools/orders paused to clear backlog
-            qty_out.append(150)  # Max out overtime processing capacity to burn backlog down
+            order_qty.append(15)  # Market cools down drastically
+            qty_out.append(150)  # Max out capacity to clear backlog
             
         # 5. Phase 4: Reset back to standard run-rate (Days 75 to 90)
         else:
@@ -61,18 +59,14 @@ def get_sample_data():
 # --- Sidebar Control Panel ---
 st.sidebar.header("🛠️ Data Controls")
 
-# Initialize session state if it doesn't exist
 if 'data_source_radio' not in st.session_state:
     st.session_state.data_source_radio = "Upload File"
 
-# 1. Define the callback function to reset the state safely
 def reset_app_state():
     st.session_state.data_source_radio = "Upload File"
 
-# 2. Attach the callback to the button
 st.sidebar.button("🔄 Reset Simulator", on_click=reset_app_state)
 
-# 3. Render the radio widget
 data_choice = st.sidebar.radio(
     "Choose Data Source:",
     ["Upload File", "Use Built-in Sample Data"],
@@ -86,7 +80,6 @@ initial_opening_balance = st.sidebar.number_input(
     step=1.0
 )
 
-# --- Data Loading Logic ---
 df = None
 
 if data_choice == "Upload File":
@@ -143,11 +136,11 @@ if df is not None:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    # --- Section 3: Simulator 2 - Backlog & Fulfillment Tracking ---
+    # --- Section 3: Simulator 2 - Fixed Backlog Flow Engine ---
     st.markdown("---")
     st.markdown("### 3. Pending Order Analysis")
     
-    pending_orders = [] 
+    pending_orders_queue = [] 
     order_history = []  
     backlog_table = []
     aging_records = []
@@ -159,6 +152,7 @@ if df is not None:
         qty_out = row['Qty. Out (Meter)']
         order_qty = row['Order Qty']
         
+        # 1. Push incoming order to FIFO tracking queues
         if order_qty > 0:
             order_node = {
                 'id': order_id_counter,
@@ -167,32 +161,39 @@ if df is not None:
                 'remaining_qty': order_qty,
                 'fully_fulfilled_date': None
             }
-            pending_orders.append(order_node)
+            pending_orders_queue.append(order_node)
             order_history.append(order_node)
             order_id_counter += 1
             
+        # 2. FIFO Processing: Actually process the queue items step-by-step
         qty_to_fulfill = qty_out
-        while qty_to_fulfill > 0 and len(pending_orders) > 0:
-            oldest_order = pending_orders[0]
+        actual_fulfilled_today = 0
+        
+        while qty_to_fulfill > 0 and len(pending_orders_queue) > 0:
+            oldest_order = pending_orders_queue[0]
             if oldest_order['remaining_qty'] <= qty_to_fulfill:
                 qty_to_fulfill -= oldest_order['remaining_qty']
+                actual_fulfilled_today += oldest_order['remaining_qty']
                 oldest_order['remaining_qty'] = 0
                 oldest_order['fully_fulfilled_date'] = current_date
-                pending_orders.pop(0)
+                pending_orders_queue.pop(0)
             else:
                 oldest_order['remaining_qty'] -= qty_to_fulfill
+                actual_fulfilled_today += qty_to_fulfill
                 qty_to_fulfill = 0
                 
-        total_pending = sum(order['remaining_qty'] for order in pending_orders)
+        # 3. Compute structural true closing balance
+        total_pending = sum(item['remaining_qty'] for item in pending_orders_queue)
         
         backlog_table.append({
             'Date': current_date.strftime('%Y-%m-%d'),
             'New Orders Received': order_qty,
-            'Orders Fulfilled': qty_out,
+            'Orders Fulfilled': actual_fulfilled_today,
             'Pending Order Closing Balance': total_pending
         })
         
-        for order in pending_orders:
+        # 4. Save snapshots for aging distribution chart
+        for order in pending_orders_queue:
             age_days = (current_date - order['placed_date']).days
             aging_records.append({
                 'Date': current_date,
@@ -228,7 +229,7 @@ if df is not None:
     ))
     fig_flow.add_trace(go.Scatter(
         x=df_backlog['Date'], y=df_backlog['Pending Order Closing Balance'],
-        mode='lines+markers', name='Closing Balance', line=dict(color='#e74c3c', width=3)
+        mode='lines', name='Closing Balance', line=dict(color='#e74c3c', width=4) # Made boulder to visually stand out
     ))
     
     fig_flow.update_layout(
