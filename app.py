@@ -10,89 +10,113 @@ st.set_page_config(page_title="Inventory & Backlog Simulator", layout="wide")
 
 st.title("📊 Inventory & Backlog Simulator")
 
-# --- Function to Generate Perfect Continuous Wave Sample Data ---
-def get_sample_data():
+# --- Dynamic Data Generation Engine ---
+def generate_dynamic_data(demand_avg, demand_std, rop, supply_qty, lead_time=14):
+    """Simulates a continuous review system to generate 90 days of realistic data."""
     dates = pd.date_range(start="2026-04-01", periods=90)
     
-    order_qty = []
-    qty_out = []
-    qty_in = []
+    # Generate Customer Orders (Demand) with some natural variance
+    order_qty = np.maximum(0, np.random.normal(demand_avg, demand_std, 90)).astype(int)
+    
+    qty_in = np.zeros(90, dtype=int)
+    qty_out = np.zeros(90, dtype=int)
+    
+    # Initial state logic
+    current_inv = int(rop * 1.25)
+    pending_supply = []  # Tracks (arrival_day, quantity)
+    
+    # Assume dispatch capacity is slightly higher than average demand to process backlogs
+    dispatch_capacity = int(demand_avg * 1.2)
     
     for day in range(90):
-        # 1. Supply side arrivals (Qty In)
-        if day in [0, 14, 28, 42, 56, 70, 84]:
-            qty_in.append(2000)
-        else:
-            qty_in.append(0)
+        # 1. Receive incoming supply if lead time has elapsed
+        for arr_day, sq in pending_supply:
+            if arr_day == day:
+                qty_in[day] += sq
+                current_inv += sq
+                
+        pending_supply = [ps for ps in pending_supply if ps[0] > day]
+        
+        # 2. Check Inventory Position against ROP
+        virtual_inv = current_inv + sum(sq for _, sq in pending_supply)
+        if virtual_inv <= rop:
+            pending_supply.append((day + lead_time, supply_qty))
             
-        # 2. Phase 1: Clean Baseline Equilibrium (Days 1 to 20)
-        if day < 20:
-            order_qty.append(100)
-            qty_out.append(100)
-            
-        # 3. Phase 2: The Structural Surge Peak (Days 21 to 40)
-        elif 20 <= day < 40:
-            if day < 30:
-                orders = 100 + (day - 20) * 35  # Climbing ramp up to 450
-            else:
-                orders = 450 - (day - 30) * 15  # Plateau sloping down to 300
-            order_qty.append(int(orders))
-            qty_out.append(120)  # Plant capacity bottleneck constraint
-            
-        # 4. Phase 3: The Burn Down Recovery (Days 41 to 75)
-        elif 40 <= day < 75:
-            order_qty.append(15)  # Market cools down drastically
-            qty_out.append(150)  # Max out capacity to clear backlog
-            
-        # 5. Phase 4: Reset back to standard run-rate (Days 75 to 90)
-        else:
-            order_qty.append(100)
-            qty_out.append(100)
+        # 3. Fulfill Orders (Qty. Out) bounded by physical inventory and plant capacity
+        qty_out[day] = min(current_inv, dispatch_capacity)
+        current_inv -= qty_out[day]
 
     return pd.DataFrame({
         "Date": dates,
         "Qty. In (Meter)": qty_in,
         "Qty. Out (Meter)": qty_out,
         "Order Qty": order_qty
-    })
+    }), int(rop * 1.25)
 
 # --- Sidebar Control Panel ---
 st.sidebar.header("🛠️ Data Controls")
 
 if 'data_source_radio' not in st.session_state:
     st.session_state.data_source_radio = "Upload File"
+    
+if 'sim_data' not in st.session_state:
+    st.session_state.sim_data = None
+    
+if 'sim_opening_balance' not in st.session_state:
+    st.session_state.sim_opening_balance = 0.0
 
 def reset_app_state():
     st.session_state.data_source_radio = "Upload File"
+    st.session_state.sim_data = None
 
 st.sidebar.button("🔄 Reset Simulator", on_click=reset_app_state)
 
 data_choice = st.sidebar.radio(
     "Choose Data Source:",
-    ["Upload File", "Use Built-in Sample Data"],
+    ["Upload File", "Dynamic Simulation"],
     key="data_source_radio"
 )
 
-initial_opening_balance = st.sidebar.number_input(
-    "Initial Opening Balance", 
-    min_value=0.0, 
-    value=150.0, 
-    step=1.0
-)
-
+# Variables for main logic
 df = None
+active_opening_balance = 0.0
 
 if data_choice == "Upload File":
+    active_opening_balance = st.sidebar.number_input("Initial Opening Balance", min_value=0.0, value=150.0, step=1.0)
     uploaded_file = st.file_uploader("Upload your data (CSV or Excel)", type=['csv', 'xlsx'])
+    
     if uploaded_file is not None:
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file)
         else:
             df = pd.read_excel(uploaded_file)
         df['Date'] = pd.to_datetime(df['Date'])
-else:
-    df = get_sample_data()
-    st.info("ℹ️ Using built-in 90-day simulation data (April - June 2026).")
+        
+elif data_choice == "Dynamic Simulation":
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Simulation Parameters")
+    
+    col_a, col_b = st.sidebar.columns(2)
+    with col_a:
+        demand_mean = st.number_input("Demand Avg", value=120, step=10)
+        rop = st.number_input("Reorder Point", value=500, step=50)
+    with col_b:
+        demand_std = st.number_input("Demand Std Dev", value=15, step=5)
+        supply_qty = st.number_input("Supply Qty", value=2000, step=100)
+        
+    calculated_opening = int(rop * 1.25)
+    st.sidebar.info(f"Opening Balance is locked to **{calculated_opening}** (1.25 × ROP).")
+    
+    if st.sidebar.button("⚙️ Generate Data"):
+        generated_df, initial_bal = generate_dynamic_data(demand_mean, demand_std, rop, supply_qty)
+        st.session_state.sim_data = generated_df
+        st.session_state.sim_opening_balance = initial_bal
+        
+    if st.session_state.sim_data is not None:
+        df = st.session_state.sim_data
+        active_opening_balance = st.session_state.sim_opening_balance
+    else:
+        st.info("👈 Please set your parameters and click **Generate Data** in the sidebar.")
 
 # --- Main Simulator Engine ---
 if df is not None:
@@ -104,7 +128,7 @@ if df is not None:
     st.markdown("### 2. Inventory Ledger (Format 1)")
     
     ledger_data = []
-    current_opening_balance = initial_opening_balance
+    current_opening_balance = active_opening_balance
     
     for index, row in df.iterrows():
         date = row['Date']
@@ -152,7 +176,6 @@ if df is not None:
         qty_out = row['Qty. Out (Meter)']
         order_qty = row['Order Qty']
         
-        # 1. Push incoming order to FIFO tracking queues
         if order_qty > 0:
             order_node = {
                 'id': order_id_counter,
@@ -165,7 +188,6 @@ if df is not None:
             order_history.append(order_node)
             order_id_counter += 1
             
-        # 2. FIFO Processing: Actually process the queue items step-by-step
         qty_to_fulfill = qty_out
         actual_fulfilled_today = 0
         
@@ -182,7 +204,6 @@ if df is not None:
                 actual_fulfilled_today += qty_to_fulfill
                 qty_to_fulfill = 0
                 
-        # 3. Compute structural true closing balance
         total_pending = sum(item['remaining_qty'] for item in pending_orders_queue)
         
         backlog_table.append({
@@ -192,7 +213,6 @@ if df is not None:
             'Pending Order Closing Balance': total_pending
         })
         
-        # 4. Save snapshots for aging distribution chart
         for order in pending_orders_queue:
             age_days = (current_date - order['placed_date']).days
             aging_records.append({
@@ -229,7 +249,7 @@ if df is not None:
     ))
     fig_flow.add_trace(go.Scatter(
         x=df_backlog['Date'], y=df_backlog['Pending Order Closing Balance'],
-        mode='lines', name='Closing Balance', line=dict(color='#e74c3c', width=4) # Made boulder to visually stand out
+        mode='lines', name='Closing Balance', line=dict(color='#e74c3c', width=4)
     ))
     
     fig_flow.update_layout(
@@ -322,6 +342,3 @@ if df is not None:
             bargap=0.1
         )
         st.plotly_chart(fig_hist, use_container_width=True)
-            
-else:
-    st.info("👈 Please select a data source from the sidebar to begin.")
